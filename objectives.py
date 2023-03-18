@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import math
@@ -26,15 +27,19 @@ import pandas as pd
 
 SILENT = True
 
+def log(message: str):
+    with open("log.txt", "a") as file:
+        file.write(f"{message}\n")
+
 class TENO5Objectives(MultiObjectiveTestProblem):
     r"""OPT problems.
     """
 
     dim = 5
     num_objectives = 2
-    _bounds = [(-4, np.log10(1/3)), (1.0, 20.0), (1, 6), (0.2, 0.4), (0.2, 0.4)]
+    _bounds = [(-5, np.log10(1/3)), (1.0, 20.0), (1, 6), (0.2, 0.4), (0.0, 0.4)]
     _decimals = [5, 0, 0, 4, 4]
-    _ref_point = [0.0, 0.0]
+    _ref_point = [0.0, -0.05]
     # _max_hv = 59.36011874867746  # this is approximated using NSGA-II
 
     def __init__(self, noise_std: Optional[float] = None, negate: bool = False) -> None:
@@ -61,7 +66,7 @@ class TENO5Objectives(MultiObjectiveTestProblem):
         tree = ET.ElementTree(file=path)
         root = tree.getroot()
         for i, x in enumerate(X):
-            x = round(10**x, 5) if i == 0 else x
+            x = round(10**x, 8) if i == 0 else x
             # root[1] is the parameters for teno5_sensor
             root[1][i].text = str(x)
         tree.write("scheme.xml")
@@ -74,18 +79,19 @@ class TENO5Objectives(MultiObjectiveTestProblem):
             data = np.hstack((self.train_x, self.sod_res, self.tgv_res))
             df = pd.DataFrame(data=data, columns=["H_ct", "H_c", "H_q", "H_eta", "L_eta", "obj_disper", "obj_iles"])
             df.to_csv("data_runtime.csv", index=None)
-        return torch.tensor(np.hstack((self.sod_res, self.tgv_res)))
+        n_x = X.shape[0]
+        return torch.tensor(np.hstack((self.sod_res[-n_x:], self.tgv_res[-n_x:])))
     
     def run_tgv(self):
         os.system("ulimit -s unlimited")
-        return os.system(f"mpiexec -n 4 ./ALPACA_3D_TENO5SENSOR ./tgv_64.xml")
+        return os.system(f"mpiexec -n 4 ./solvers/ALPACA_3D_TENO5SENSOR ./tgv_64.xml")
     
     def tgv_iles_obj(self, n: int):
         tgv = TaylorGreenVortex(f"runtime_data/tgv_64_{n}/domain/data_10.000*.h5")
         if tgv.result_exit:
             return tgv.objective_spectrum() / self.tgv_ref.objective_spectrum() - 1
         else:
-            return 1
+            return 0.1
 
     def tgv_iles(self, x):
         self.tgv_count += 1
@@ -101,7 +107,7 @@ class TENO5Objectives(MultiObjectiveTestProblem):
         self.tgv_res.append([self.tgv_iles_obj(self.tgv_count)])
     
     def run_sod(self):
-        return os.system("mpiexec -n 1 ./ALPACA_1D_TENO5SENSOR ./sod_64.xml")
+        return os.system("mpiexec -n 1 ./solvers/ALPACA_1D_TENO5SENSOR ./sod_64.xml")
     
     def rename_folder(self, folder: str, n: int):
         if not os.path.exists("runtime_data"):
@@ -110,7 +116,10 @@ class TENO5Objectives(MultiObjectiveTestProblem):
         
     def sod_dispersion_obj(self, n: int):
         sod = Sod(f"runtime_data/sod_64_{n}/domain/data_0.200*.h5")
-        return sod.highorder_reconstructed_rhs() / self.sod_ref.highorder_reconstructed_rhs() - 1
+        if sod.result_exit:
+            return sod.highorder_reconstructed_rhs() / self.sod_ref.highorder_reconstructed_rhs() - 1
+        else:
+            return 0.01
 
     def sod_dispersion(self, x):
         self.sod_count += 1
